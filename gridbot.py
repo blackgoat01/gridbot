@@ -4,6 +4,12 @@ import requests
 from pybit import HTTP
 from time import sleep
 
+try:
+    price = session.ticker_price(symbol="DOGEUSDT")["price"]
+    send_telegram_message(f"✅ Preis für DOGEUSDT: {price}")
+except Exception as e:
+    send_telegram_message(f"⚠️ Preisabruf fehlgeschlagen: {str(e)}")
+
 # Telegram-Funktion
 def send_telegram(msg):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
