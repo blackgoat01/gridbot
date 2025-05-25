@@ -20,26 +20,30 @@ session = HTTP(
     api_secret=os.getenv("API_SECRET")
 )
 
-# GridBot-Logik mit Preisabfrage und Beispiel-Scan
+# GridBot-Logik mit Preisabfrage und Schutz vor doppelten Orders
 symbol = "DOGEUSDT"
 category = "spot"
+last_price = None
 
-try:
-    response = session.get_tickers(category=category, symbol=symbol)
-    price = float(response["result"]["list"][0]["lastPrice"])
-    send_telegram_message(f"✅ GridBot gestartet. Aktueller Preis von {symbol}: {price} USDT")
+while True:
+    try:
+        response = session.get_tickers(category=category, symbol=symbol)
+        price = float(response["result"]["list"][0]["lastPrice"])
 
-    # Beispiel: Preisbereich für Grid festlegen
-    grid_count = 10
-    grid_spacing = 0.5 / 100  # 0.5 % Abstand
-    grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count//2, grid_count//2 + 1)]
+        if price != last_price:
+            last_price = price
+            send_telegram_message(f"✅ GridBot läuft (15 Min). DOGEUSDT = {price} USDT")
 
-    send_telegram_message(f"✅ Grid-Preise: {grid_prices}")
+            # Grid-Level-Berechnung
+            grid_count = 10
+            grid_spacing = 0.005  # 0.5 %
+            grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count//2, grid_count//2 + 1)]
 
-except Exception as e:
-    send_telegram_message(f"❌ Fehler beim Preisabruf: {str(e)}")
-    print("Fehler beim Preisabruf:", e)
+            send_telegram_message(f"📊 Grid-Level: {grid_prices}")
+        else:
+            send_telegram_message("🔁 Kein Preiswechsel – keine neue Order notwendig.")
 
-# Pause bis zur nächsten Ausführung
-send_telegram_message("✅ Grid-Scan abgeschlossen. Bot pausiert für 60 Minuten.")
-time.sleep(3600)
+    except Exception as e:
+        send_telegram_message(f"❌ Fehler beim Abrufen: {str(e)}")
+
+    time.sleep(900)  # 15 Minuten
