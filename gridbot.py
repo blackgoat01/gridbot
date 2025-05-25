@@ -1,64 +1,52 @@
 import os
 import time
-import math
 import requests
-from pybit import HTTP
+from pybit.unified_trading import HTTP
 
-# === Telegram Funktion ===
-def send_telegram(msg):
+# Telegram-Benachrichtigung
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+def send_telegram_message(message):
     try:
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = {"chat_id": chat_id, "text": msg}
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {"chat_id": CHAT_ID, "text": message}
         requests.post(url, data=data)
     except Exception as e:
         print("Telegram Fehler:", e)
 
-# === Bybit Session ===
-api_key = os.getenv("API_KEY")
-api_secret = os.getenv("API_SECRET")
-session = HTTP(api_key=api_key, api_secret=api_secret)
+# Bybit-Verbindung
+session = HTTP(
+    api_key=os.getenv("API_KEY"),
+    api_secret=os.getenv("API_SECRET"),
+    testnet=False
+)
+
+send_telegram_message("✅ GridBot wurde gestartet und ist aktiv.")
 
 symbol = "DOGEUSDT"
-budget = 10  # USDT
-grid_count = 10
-grid_percent = 1  # % Abstand pro Grid
+interval = 60 * 60  # 60 Minuten
 
 try:
-    price = float(session.get_orderbook(symbol=symbol)["result"]["a"][0][0])
+    ticker = session.get_ticker(category="spot", symbol=symbol)
+    price = float(ticker["result"]["lastPrice"])
 except Exception as e:
-    send_telegram(f"⚠️ Fehler beim Preisabruf: {str(e)}")
-    raise SystemExit
+    send_telegram_message(f"⚠️ Fehler beim Preisabruf: {str(e)}")
+    price = None
 
-# === Grid-Berechnung ===
-low_price = price * (1 - (grid_percent / 100) * grid_count / 2)
-high_price = price * (1 + (grid_percent / 100) * grid_count / 2)
-grid_spacing = (high_price - low_price) / grid_count
-usdt_per_order = budget / grid_count
+if price:
+    grids = 10
+    spread = 0.01  # 1% pro Grid
+    quantity = 10  # Beispielmenge
 
-orders = []
-for i in range(grid_count):
-    grid_price = round(low_price + grid_spacing * i, 6)
-    qty = round(usdt_per_order / grid_price, 2)
-    orders.append({"price": grid_price, "qty": qty})
+    lower = price * (1 - (spread * grids / 2))
+    upper = price * (1 + (spread * grids / 2))
+    step = (upper - lower) / grids
 
-# === Orders platzieren ===
-placed = 0
-for order in orders:
-    try:
-        session.place_active_order(
-            symbol=symbol,
-            side="Buy",
-            order_type="Limit",
-            qty=order["qty"],
-            price=order["price"],
-            time_in_force="GoodTillCancel",
-            reduce_only=False
-        )
-        placed += 1
-        time.sleep(0.3)
-    except Exception as e:
-        send_telegram(f"⚠️ Orderfehler bei {order['price']}: {str(e)}")
+    grid_prices = [round(lower + i * step, 4) for i in range(grids + 1)]
 
-send_telegram(f"✅ GridBot aktiv auf {symbol}: {placed}/{grid_count} Buy-Orders platziert bei Preis ~ {price:.05f} USDT")
+    send_telegram_message("📊 Grid-Scan abgeschlossen. Warte 60 min.")
+else:
+    send_telegram_message("❌ Grid-Scan konnte nicht durchgeführt werden.")
+
+time.sleep(interval)
