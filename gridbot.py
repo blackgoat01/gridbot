@@ -1,9 +1,9 @@
 import os
 import time
-import requests
 from pybit.unified_trading import HTTP
+import requests
 
-# Telegram Nachricht senden
+# Telegram-Konfiguration
 def send_telegram_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -14,32 +14,32 @@ def send_telegram_message(message):
     except Exception as e:
         print("Telegram-Fehler:", e)
 
-# Bybit-Session
+# Bybit-Verbindung
 session = HTTP(
     api_key=os.getenv("API_KEY"),
     api_secret=os.getenv("API_SECRET")
 )
 
-# Einstieg
-send_telegram_message("✅ GridBot wurde gestartet und ist aktiv.")
-
+# GridBot-Logik mit Preisabfrage und Beispiel-Scan
 symbol = "DOGEUSDT"
+category = "spot"
 
 try:
-    # Preis abfragen
-    ticker_data = session.get_tickers(symbol=symbol)
-    price = float(ticker_data["result"]["list"][0]["lastPrice"])
+    response = session.get_tickers(category=category, symbol=symbol)
+    price = float(response["result"]["list"][0]["lastPrice"])
+    send_telegram_message(f"✅ GridBot gestartet. Aktueller Preis von {symbol}: {price} USDT")
 
-    # Orderbuch abfragen
-    orderbook_data = session.get_order_book(symbol=symbol)
-    best_bid = float(orderbook_data["result"]["b"][0][0])
-    best_ask = float(orderbook_data["result"]["a"][0][0])
+    # Beispiel: Preisbereich für Grid festlegen
+    grid_count = 10
+    grid_spacing = 0.5 / 100  # 0.5 % Abstand
+    grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count//2, grid_count//2 + 1)]
 
-    send_telegram_message(f"📊 {symbol} Preis: {price} | Bid: {best_bid} | Ask: {best_ask}")
+    send_telegram_message(f"✅ Grid-Preise: {grid_prices}")
 
 except Exception as e:
-    send_telegram_message(f"⚠️ Fehler beim Preisabruf: {str(e)}")
+    send_telegram_message(f"❌ Fehler beim Preisabruf: {str(e)}")
+    print("Fehler beim Preisabruf:", e)
 
-# Wartezeit (nur Testlauf)
-time.sleep(10)
-send_telegram_message("✅ Grid-Scan abgeschlossen. Bot pausiert 60 Minuten.")
+# Pause bis zur nächsten Ausführung
+send_telegram_message("✅ Grid-Scan abgeschlossen. Bot pausiert für 60 Minuten.")
+time.sleep(3600)
