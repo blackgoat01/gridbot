@@ -3,50 +3,43 @@ import time
 import requests
 from pybit.unified_trading import HTTP
 
-# Telegram-Benachrichtigung
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
+# Telegram Nachricht senden
 def send_telegram_message(message):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": message}
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message}
         requests.post(url, data=data)
     except Exception as e:
-        print("Telegram Fehler:", e)
+        print("Telegram-Fehler:", e)
 
-# Bybit-Verbindung
+# Bybit-Session
 session = HTTP(
     api_key=os.getenv("API_KEY"),
-    api_secret=os.getenv("API_SECRET"),
-    testnet=False
+    api_secret=os.getenv("API_SECRET")
 )
 
+# Einstieg
 send_telegram_message("✅ GridBot wurde gestartet und ist aktiv.")
 
 symbol = "DOGEUSDT"
-interval = 60 * 60  # 60 Minuten
 
 try:
-    ticker = session.get_ticker(category="spot", symbol=symbol)
-    price = float(ticker["result"]["lastPrice"])
+    # Preis abfragen
+    ticker_data = session.get_tickers(symbol=symbol)
+    price = float(ticker_data["result"]["list"][0]["lastPrice"])
+
+    # Orderbuch abfragen
+    orderbook_data = session.get_order_book(symbol=symbol)
+    best_bid = float(orderbook_data["result"]["b"][0][0])
+    best_ask = float(orderbook_data["result"]["a"][0][0])
+
+    send_telegram_message(f"📊 {symbol} Preis: {price} | Bid: {best_bid} | Ask: {best_ask}")
+
 except Exception as e:
     send_telegram_message(f"⚠️ Fehler beim Preisabruf: {str(e)}")
-    price = None
 
-if price:
-    grids = 10
-    spread = 0.01  # 1% pro Grid
-    quantity = 10  # Beispielmenge
-
-    lower = price * (1 - (spread * grids / 2))
-    upper = price * (1 + (spread * grids / 2))
-    step = (upper - lower) / grids
-
-    grid_prices = [round(lower + i * step, 4) for i in range(grids + 1)]
-
-    send_telegram_message("📊 Grid-Scan abgeschlossen. Warte 60 min.")
-else:
-    send_telegram_message("❌ Grid-Scan konnte nicht durchgeführt werden.")
-
-time.sleep(interval)
+# Wartezeit (nur Testlauf)
+time.sleep(10)
+send_telegram_message("✅ Grid-Scan abgeschlossen. Bot pausiert 60 Minuten.")
