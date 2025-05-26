@@ -6,74 +6,73 @@ import json
 import os
 from datetime import datetime
 
-# KONFIGURATION
+# Konfiguration über Umgebungsvariablen
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-SYMBOL = 'DOGEUSDT'
+SYMBOL = "DOGEUSDT"
 GRID_QTY = 45
 GRID_BUY_PRICE = 0.2182
 GRID_SELL_PRICE = 0.2204
-CHECK_INTERVAL = 15 * 60  # alle 15 Minuten
+CHECK_INTERVAL = 15 * 60
 
-BASE_URL = 'https://api.bybit.com'
+BASE_URL = "https://api.bybit.com"
 
-# TELEGRAM SENDEN
-def send_telegram_message(message):
+# Telegram-Funktion
+def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
         requests.post(url, data=payload)
     except Exception as e:
         print("Telegram Fehler:", e)
 
-# SIGNATUR-FUNKTION (für V5 GET & POST)
-def create_signature(data, api_secret, is_body=False):
-    if is_body:
-        payload = json.dumps(data)
-    else:
-        sorted_params = sorted(data.items())
-        payload = ''.join([f'{k}={v}' for k, v in sorted_params])
-    return hmac.new(api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+# Signatur erstellen für POST (Body-Hashing)
+def create_signature(body: str, secret: str):
+    return hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
 
-# ZEITSTEMPEL
+# Zeitstempel
 def get_timestamp():
-    return int(time.time() * 1000)
+    return str(int(time.time() * 1000))
 
-# HEADERS
-def get_headers():
+# Header für V5
+def get_headers(signature, timestamp):
     return {
         "X-BAPI-API-KEY": API_KEY,
+        "X-BAPI-SIGN": signature,
+        "X-BAPI-TIMESTAMP": timestamp,
         "Content-Type": "application/json"
     }
 
-# WALLET ABFRAGEN
+# Wallet-Check
 def get_wallet_balance():
-    url = BASE_URL + "/v5/account/wallet-balance"
+    url = f"{BASE_URL}/v5/account/wallet-balance?accountType=UNIFIED"
     timestamp = get_timestamp()
-    params = {
-        "accountType": "UNIFIED",
-        "coin": "DOGE",
-        "timestamp": timestamp
+    headers = {
+        "X-BAPI-API-KEY": API_KEY,
+        "X-BAPI-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
     }
-    signature = create_signature(params, API_SECRET, is_body=False)
-    headers = get_headers()
+    body = {}
+    signature = create_signature("", API_SECRET)
     headers["X-BAPI-SIGN"] = signature
-    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
-    response = requests.get(url, headers=headers, params=params)
+    response = requests.get(url, headers=headers)
     try:
         data = response.json()
-        doge = float(data['result']['list'][0]['coin'][0]['availableBalance'])
-        return doge
+        balance = data["result"]["list"][0]["coin"]
+        for c in balance:
+            if c["coin"] == "DOGE":
+                return float(c["availableBalance"])
+        return 0.0
     except Exception as e:
-        send_telegram_message(f"Wallet Fehler: {e}")
+        send_telegram(f"Wallet Fehler: {str(e)}")
         return 0.0
 
-# ORDER PLATZIEREN
+# Order platzieren
 def place_order(side, price, qty):
-    url = BASE_URL + "/v5/order/create"
+    url = f"{BASE_URL}/v5/order/create"
     timestamp = get_timestamp()
     body = {
         "category": "spot",
@@ -82,44 +81,32 @@ def place_order(side, price, qty):
         "order_type": "Limit",
         "qty": str(qty),
         "price": str(price),
-        "time_in_force": "GTC",
-        "timestamp": timestamp
+        "time_in_force": "GTC"
     }
-    signature = create_signature(body, API_SECRET, is_body=True)
-    headers = get_headers()
-    headers["X-BAPI-SIGN"] = signature
-    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
-    response = requests.post(url, headers=headers, data=json.dumps(body))
-    result = f"{side} Order: {qty} {SYMBOL} @ {price} \u2794 Antwort: {response.text}"
-    print(result)
-    send_telegram_message(result)
+    body_str = json.dumps(body)
+    signature = create_signature(body_str, API_SECRET)
+    headers = get_headers(signature, timestamp)
+    response = requests.post(url, headers=headers, data=body_str)
+    send_telegram(f"{side} Order: {qty} {SYMBOL} @ {price} ➜ Antwort: {response.text}")
 
-# HAUPTFUNKTION
-def run_grid_bot():
-    send_telegram_message("\u2705 GridBot wurde erfolgreich gestartet!")
+# GridBot
+def run_bot():
+    send_telegram("✅ GridBot wurde erfolgreich gestartet!")
     while True:
-        now = datetime.now().strftime('%H:%M:%S')
-        print(f"\n[{now}] GridBot startet ...")
+        try:
+            current = datetime.now().strftime("%H:%M:%S")
+            send_telegram(f"✅ GridBot läuft ({CHECK_INTERVAL // 60} Min). {SYMBOL} = Grid aktiv [{current}]")
+            place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
+            time.sleep(5)
+            wallet = get_wallet_balance()
+            if wallet >= GRID_QTY:
+                place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
+            else:
+                send_telegram("⚠️ Noch nicht genug DOGE vorhanden. Sell wird übersprungen.")
+            time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            send_telegram(f"❌ Fehler im Bot: {str(e)}")
+            time.sleep(CHECK_INTERVAL)
 
-        # 1. Buy setzen
-        place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
-        time.sleep(5)
-
-        # 2. Prüfen ob DOGE im Wallet
-        doge_balance = get_wallet_balance()
-        print("Verfügbare DOGE im Wallet:", doge_balance)
-
-        if doge_balance >= GRID_QTY:
-            # 3. Sell setzen
-            place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
-        else:
-            warn = "\u26a0\ufe0f Noch nicht genug DOGE vorhanden. Sell wird übersprungen."
-            print(warn)
-            send_telegram_message(warn)
-
-        print(f"\u2705 Nächster Durchlauf in {CHECK_INTERVAL / 60} Minuten...")
-        time.sleep(CHECK_INTERVAL)
-
-# START
-if __name__ == '__main__':
-    run_grid_bot()
+if __name__ == "__main__":
+    run_bot()
