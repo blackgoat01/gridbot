@@ -24,6 +24,8 @@ session = HTTP(
 symbol = "DOGEUSDT"
 category = "spot"
 last_price = None
+usdt_per_order = 10
+profit_margin = 0.01  # 1% Gewinnziel pro Trade
 
 while True:
     try:
@@ -39,7 +41,37 @@ while True:
             grid_spacing = 0.005  # 0.5 %
             grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count//2, grid_count//2 + 1)]
 
-            send_telegram_message(f"📊 Grid-Level: {grid_prices}")
+            # Orderplatzierung bei unterem Grid-Level (Kaufsignal)
+            lowest_buy_price = min(grid_prices)
+            qty = round(usdt_per_order / lowest_buy_price, 2)
+            try:
+                session.place_order(
+                    category=category,
+                    symbol=symbol,
+                    side="Buy",
+                    order_type="Limit",
+                    qty=qty,
+                    price=lowest_buy_price,
+                    time_in_force="GTC"
+                )
+                send_telegram_message(f"📥 Limit-Buy platziert: {qty} DOGE @ {lowest_buy_price} USDT")
+
+                # Ziel-Verkaufspreis mit Gewinnaufschlag
+                target_sell_price = round(lowest_buy_price * (1 + profit_margin), 4)
+                session.place_order(
+                    category=category,
+                    symbol=symbol,
+                    side="Sell",
+                    order_type="Limit",
+                    qty=qty,
+                    price=target_sell_price,
+                    time_in_force="GTC"
+                )
+                send_telegram_message(f"📤 Limit-Sell platziert: {qty} DOGE @ {target_sell_price} USDT")
+
+            except Exception as e:
+                send_telegram_message(f"⚠️ Fehler bei Orderplatzierung: {str(e)}")
+
         else:
             send_telegram_message("🔁 Kein Preiswechsel – keine neue Order notwendig.")
 
