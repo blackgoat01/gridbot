@@ -16,11 +16,14 @@ CHECK_INTERVAL = 15 * 60  # alle 15 Minuten
 
 BASE_URL = 'https://api.bybit.com'
 
-# SIGNATUR-FUNKTION (für V5)
-def create_signature(params, api_secret):
-    sorted_params = sorted(params.items())
-    query_string = "".join([str(k) + str(v) for k, v in sorted_params])
-    return hmac.new(bytes(api_secret, "utf-8"), bytes(query_string, "utf-8"), hashlib.sha256).hexdigest()
+# SIGNATUR-FUNKTION (für V5 GET & POST)
+def create_signature(data, api_secret, is_body=False):
+    if is_body:
+        payload = json.dumps(data)
+    else:
+        sorted_params = sorted(data.items())
+        payload = ''.join([f'{k}={v}' for k, v in sorted_params])
+    return hmac.new(api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 # ZEITSTEMPEL
 def get_timestamp():
@@ -30,22 +33,22 @@ def get_timestamp():
 def get_headers():
     return {
         "X-BAPI-API-KEY": API_KEY,
-        "X-BAPI-SIGN": "",
         "Content-Type": "application/json"
     }
 
 # WALLET ABFRAGEN
 def get_wallet_balance():
-    url = BASE_URL + "/v5/account/wallet-balance?accountType=UNIFIED"
-    headers = get_headers()
+    url = BASE_URL + "/v5/account/wallet-balance"
     timestamp = get_timestamp()
     params = {
         "accountType": "UNIFIED",
         "coin": "DOGE",
         "timestamp": timestamp
     }
-    signature = create_signature(params, API_SECRET)
+    signature = create_signature(params, API_SECRET, is_body=False)
+    headers = get_headers()
     headers["X-BAPI-SIGN"] = signature
+    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
     response = requests.get(url, headers=headers, params=params)
     try:
         data = response.json()
@@ -56,9 +59,9 @@ def get_wallet_balance():
         return 0.0
 
 # ORDER PLATZIEREN
-
 def place_order(side, price, qty):
     url = BASE_URL + "/v5/order/create"
+    timestamp = get_timestamp()
     body = {
         "category": "spot",
         "symbol": SYMBOL,
@@ -67,16 +70,16 @@ def place_order(side, price, qty):
         "qty": str(qty),
         "price": str(price),
         "time_in_force": "GTC",
-        "timestamp": get_timestamp()
+        "timestamp": timestamp
     }
-    signature = create_signature(body, API_SECRET)
+    signature = create_signature(body, API_SECRET, is_body=True)
     headers = get_headers()
     headers["X-BAPI-SIGN"] = signature
+    headers["X-BAPI-TIMESTAMP"] = str(timestamp)
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print(f"{side} Order: {qty} {SYMBOL} @ {price} ➜ Antwort: {response.text}")
 
 # HAUPTFUNKTION
-
 def run_grid_bot():
     while True:
         print(f"\n[{datetime.now().strftime('%H:%M:%S')}] GridBot startet ...")
