@@ -1,87 +1,104 @@
-
-import os
-import time
-from pybit.unified_trading import HTTP
 import requests
+import time
+import hmac
+import hashlib
+import json
+from datetime import datetime
 
-# Telegram-Konfiguration
-def send_telegram_message(message):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": message}
+# KONFIGURATION
+API_KEY = 'DEIN_API_KEY'
+API_SECRET = 'DEIN_API_SECRET'
+SYMBOL = 'DOGEUSDT'
+GRID_QTY = 45
+GRID_BUY_PRICE = 0.2182
+GRID_SELL_PRICE = 0.2204
+CHECK_INTERVAL = 15 * 60  # alle 15 Minuten
+
+BASE_URL = 'https://api.bybit.com'
+
+# SIGNATUR-FUNKTION (für V5)
+def create_signature(params, api_secret):
+    sorted_params = sorted(params.items())
+    query_string = "".join([str(k) + str(v) for k, v in sorted_params])
+    return hmac.new(bytes(api_secret, "utf-8"), bytes(query_string, "utf-8"), hashlib.sha256).hexdigest()
+
+# ZEITSTEMPEL
+def get_timestamp():
+    return int(time.time() * 1000)
+
+# HEADERS
+def get_headers():
+    return {
+        "X-BAPI-API-KEY": API_KEY,
+        "X-BAPI-SIGN": "",
+        "Content-Type": "application/json"
+    }
+
+# WALLET ABFRAGEN
+def get_wallet_balance():
+    url = BASE_URL + "/v5/account/wallet-balance?accountType=UNIFIED"
+    headers = get_headers()
+    timestamp = get_timestamp()
+    params = {
+        "accountType": "UNIFIED",
+        "coin": "DOGE",
+        "timestamp": timestamp
+    }
+    signature = create_signature(params, API_SECRET)
+    headers["X-BAPI-SIGN"] = signature
+    response = requests.get(url, headers=headers, params=params)
     try:
-        requests.post(url, data=data)
+        data = response.json()
+        doge = float(data['result']['list'][0]['coin'][0]['availableBalance'])
+        return doge
     except Exception as e:
-        print("Telegram-Fehler:", e)
+        print("Wallet Fehler:", e)
+        return 0.0
 
-# Bybit-Verbindung
-session = HTTP(
-    api_key=os.getenv("API_KEY"),
-    api_secret=os.getenv("API_SECRET")
-)
+# ORDER PLATZIEREN
 
-# Bot-Parameter
-symbol = "DOGEUSDT"
-category = "spot"
-usdt_per_order = 10
-profit_margin = 0.01  # 1% Gewinnziel pro Trade
+def place_order(side, price, qty):
+    url = BASE_URL + "/v5/order/create"
+    body = {
+        "category": "spot",
+        "symbol": SYMBOL,
+        "side": side,
+        "order_type": "Limit",
+        "qty": str(qty),
+        "price": str(price),
+        "time_in_force": "GTC",
+        "timestamp": get_timestamp()
+    }
+    signature = create_signature(body, API_SECRET)
+    headers = get_headers()
+    headers["X-BAPI-SIGN"] = signature
+    response = requests.post(url, headers=headers, data=json.dumps(body))
+    print(f"{side} Order: {qty} {SYMBOL} @ {price} ➜ Antwort: {response.text}")
 
-# Rundungsfunktion für Menge
-def format_qty(qty):
-    return round(qty, 0)  # Ganzzahlige DOGE-Menge
+# HAUPTFUNKTION
 
-while True:
-    try:
-        response = session.get_tickers(category=category, symbol=symbol)
-        price = float(response["result"]["list"][0]["lastPrice"])
-        send_telegram_message(f"✅ GridBot läuft (15 Min). {symbol} = {price} USDT")
+def run_grid_bot():
+    while True:
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] GridBot startet ...")
 
-        # Grid-Berechnung
-        grid_count = 10
-        grid_spacing = 0.005
-        grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count//2, grid_count//2 + 1)]
-        buy_price = min(grid_prices)
-        qty = format_qty(usdt_per_order / buy_price)
+        # 1. Buy setzen
+        place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
+        time.sleep(5)
 
-        # Guthaben prüfen
-        balances = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]["coin"]
-        usdt_balance = next((coin for coin in balances if coin["coin"] == "USDT"), {"availableToTrade": 0})["availableToTrade"]
-        doge_balance = next((coin for coin in balances if coin["coin"] == "DOGE"), {"availableToTrade": 0})["availableToTrade"]
-        usdt_balance = float(usdt_balance)
-        doge_balance = float(doge_balance)
+        # 2. Prüfen ob DOGE im Wallet
+        doge_balance = get_wallet_balance()
+        print("Verfügbare DOGE im Wallet:", doge_balance)
 
-        if usdt_balance >= qty * buy_price:
-            session.place_order(
-                category=category,
-                symbol=symbol,
-                side="Buy",
-                order_type="Limit",
-                qty=qty,
-                price=buy_price,
-                time_in_force="GTC"
-            )
-            send_telegram_message(f"📥 Limit-Buy platziert: {qty} DOGE @ {buy_price} USDT")
+        if doge_balance >= GRID_QTY:
+            # 3. Sell setzen
+            place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
         else:
-            send_telegram_message(f"⚠️ Nicht genug USDT für Kauf ({qty} DOGE @ {buy_price})")
+            print("⚠️ Noch nicht genug DOGE vorhanden. Sell wird übersprungen.")
 
-        # Verkaufslogik nur wenn DOGE vorhanden ist
-        if doge_balance >= qty:
-            sell_price = round(buy_price * (1 + profit_margin), 4)
-            session.place_order(
-                category=category,
-                symbol=symbol,
-                side="Sell",
-                order_type="Limit",
-                qty=qty,
-                price=sell_price,
-                time_in_force="GTC"
-            )
-            send_telegram_message(f"📤 Limit-Sell platziert: {qty} DOGE @ {sell_price} USDT")
-        else:
-            send_telegram_message(f"⛔ Kein DOGE im Wallet – Verkauf wird übersprungen")
+        # 4. Pause
+        print(f"✅ Nächster Durchlauf in {CHECK_INTERVAL / 60} Minuten...")
+        time.sleep(CHECK_INTERVAL)
 
-    except Exception as e:
-        send_telegram_message(f"❌ Allgemeiner Fehler: {str(e)}")
-
-    time.sleep(900)
+# START
+if __name__ == '__main__':
+    run_grid_bot()
