@@ -3,11 +3,15 @@ import time
 import hmac
 import hashlib
 import json
+import os
 from datetime import datetime
 
 # KONFIGURATION
-API_KEY = 'DEIN_API_KEY'
-API_SECRET = 'DEIN_API_SECRET'
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 SYMBOL = 'DOGEUSDT'
 GRID_QTY = 45
 GRID_BUY_PRICE = 0.2182
@@ -15,6 +19,15 @@ GRID_SELL_PRICE = 0.2204
 CHECK_INTERVAL = 15 * 60  # alle 15 Minuten
 
 BASE_URL = 'https://api.bybit.com'
+
+# TELEGRAM SENDEN
+def send_telegram_message(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Telegram Fehler:", e)
 
 # SIGNATUR-FUNKTION (für V5 GET & POST)
 def create_signature(data, api_secret, is_body=False):
@@ -55,7 +68,7 @@ def get_wallet_balance():
         doge = float(data['result']['list'][0]['coin'][0]['availableBalance'])
         return doge
     except Exception as e:
-        print("Wallet Fehler:", e)
+        send_telegram_message(f"Wallet Fehler: {e}")
         return 0.0
 
 # ORDER PLATZIEREN
@@ -77,12 +90,16 @@ def place_order(side, price, qty):
     headers["X-BAPI-SIGN"] = signature
     headers["X-BAPI-TIMESTAMP"] = str(timestamp)
     response = requests.post(url, headers=headers, data=json.dumps(body))
-    print(f"{side} Order: {qty} {SYMBOL} @ {price} ➜ Antwort: {response.text}")
+    result = f"{side} Order: {qty} {SYMBOL} @ {price} \u2794 Antwort: {response.text}"
+    print(result)
+    send_telegram_message(result)
 
 # HAUPTFUNKTION
 def run_grid_bot():
+    send_telegram_message("\u2705 GridBot wurde erfolgreich gestartet!")
     while True:
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] GridBot startet ...")
+        now = datetime.now().strftime('%H:%M:%S')
+        print(f"\n[{now}] GridBot startet ...")
 
         # 1. Buy setzen
         place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
@@ -96,10 +113,11 @@ def run_grid_bot():
             # 3. Sell setzen
             place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
         else:
-            print("⚠️ Noch nicht genug DOGE vorhanden. Sell wird übersprungen.")
+            warn = "\u26a0\ufe0f Noch nicht genug DOGE vorhanden. Sell wird übersprungen."
+            print(warn)
+            send_telegram_message(warn)
 
-        # 4. Pause
-        print(f"✅ Nächster Durchlauf in {CHECK_INTERVAL / 60} Minuten...")
+        print(f"\u2705 Nächster Durchlauf in {CHECK_INTERVAL / 60} Minuten...")
         time.sleep(CHECK_INTERVAL)
 
 # START
