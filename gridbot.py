@@ -3,17 +3,18 @@ import time
 from pybit.unified_trading import HTTP
 import requests
 
-# Telegram-Benachrichtigung
-def send_telegram(message):
+# Telegram-Konfiguration
+def send_telegram_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": message}
     try:
-        requests.post(url, data={"chat_id": chat_id, "text": message})
-    except:
-        pass
+        requests.post(url, data=data)
+    except Exception as e:
+        print("Telegram-Fehler:", e)
 
-# API-Verbindung
+# Bybit-Session initialisieren
 session = HTTP(
     api_key=os.getenv("API_KEY"),
     api_secret=os.getenv("API_SECRET")
@@ -22,60 +23,84 @@ session = HTTP(
 symbol = "DOGEUSDT"
 category = "spot"
 usdt_per_order = 10
-profit_margin = 0.01  # 1 % Zielgewinn
+profit_margin = 0.01
+min_qty_precision = 0  # DOGE erlaubt nur ganze Stücke
 
-send_telegram("✅ Verbindung zur Bybit API erfolgreich. Bot startet...")
+def get_last_price():
+    response = session.get_tickers(category=category, symbol=symbol)
+    return float(response["result"]["list"][0]["lastPrice"])
 
-last_price = None
+def get_active_orders():
+    return session.get_open_orders(category=category, symbol=symbol)["result"]["list"]
+
+def cancel_all_orders():
+    try:
+        session.cancel_all_orders(category=category, symbol=symbol)
+    except Exception as e:
+        send_telegram_message(f"❌ Fehler beim Löschen offener Orders: {str(e)}")
+
+def place_limit_buy(qty, price):
+    try:
+        response = session.place_order(
+            category=category,
+            symbol=symbol,
+            side="Buy",
+            order_type="Limit",
+            qty=qty,
+            price=price,
+            time_in_force="GTC"
+        )
+        send_telegram_message(f"📥 Limit-Buy platziert: {qty} DOGE @ {price} USDT")
+        return response["result"]["orderId"]
+    except Exception as e:
+        send_telegram_message(f"⚠️ Fehler bei Kauforder: {str(e)}")
+        return None
+
+def place_limit_sell(qty, price):
+    try:
+        session.place_order(
+            category=category,
+            symbol=symbol,
+            side="Sell",
+            order_type="Limit",
+            qty=qty,
+            price=price,
+            time_in_force="GTC"
+        )
+        send_telegram_message(f"📤 Limit-Sell platziert: {qty} DOGE @ {price} USDT")
+    except Exception as e:
+        send_telegram_message(f"⚠️ Fehler bei Sellorder: {str(e)}")
 
 while True:
     try:
-        ticker = session.get_tickers(category=category, symbol=symbol)
-        price = float(ticker["result"]["list"][0]["lastPrice"])
+        price = get_last_price()
+        send_telegram_message(f"✅ GridBot läuft (15 Min). {symbol} = {price} USDT")
 
-        if price != last_price:
-            last_price = price
-            send_telegram(f"✅ GridBot läuft (15 Min). DOGEUSDT = {price} USDT")
+        # Grid-Level Berechnung
+        grid_spacing = 0.005
+        grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-5, 6)]
+        buy_price = min(grid_prices)
+        qty = round(usdt_per_order / buy_price)
 
-            grid_count = 10
-            grid_spacing = 0.005
-            grid_prices = [round(price * (1 + grid_spacing) ** i, 4) for i in range(-grid_count // 2, grid_count // 2 + 1)]
-            buy_price = min(grid_prices)
+        # Vorherige Orders löschen
+        cancel_all_orders()
 
-            qty = int(usdt_per_order // buy_price)  # Nur ganze DOGE
-            if qty == 0:
-                send_telegram("⚠️ Menge zu klein für Kauforder.")
-                time.sleep(900)
-                continue
+        # Buy-Order setzen
+        buy_order_id = place_limit_buy(qty, buy_price)
 
-            try:
-                session.place_order(
-                    category=category,
-                    symbol=symbol,
-                    side="Buy",
-                    order_type="Limit",
-                    qty=qty,
-                    price=buy_price,
-                    time_in_force="GTC"
-                )
-                send_telegram(f"📥 Limit-Buy platziert: {qty} DOGE @ {buy_price} USDT")
+        # Warten auf Ausführung
+        time.sleep(60)
+        order_status = session.get_order(
+            category=category, symbol=symbol, orderId=buy_order_id
+        )["result"]
 
-                sell_price = round(buy_price * (1 + profit_margin), 4)
-                session.place_order(
-                    category=category,
-                    symbol=symbol,
-                    side="Sell",
-                    order_type="Limit",
-                    qty=qty,
-                    price=sell_price,
-                    time_in_force="GTC"
-                )
-                send_telegram(f"📤 Limit-Sell platziert: {qty} DOGE @ {sell_price} USDT")
-
-            except Exception as e:
-                send_telegram(f"⚠️ Fehler bei Orderplatzierung: {str(e)}")
+        if order_status["orderStatus"] == "Filled":
+            sell_price = round(buy_price * (1 + profit_margin), 4)
+            place_limit_sell(qty, sell_price)
+        else:
+            send_telegram_message("⌛ Buy-Order noch nicht ausgeführt, Sell wird nicht gesetzt.")
 
     except Exception as e:
-        send_telegram(f"❌ API-Fehler: {str(e)}")
+        send_telegram_message(f"❌ Allgemeiner Fehler: {str(e)}")
 
-    time.sleep(900)
+    time.sleep(900)  # 15 Minuten
