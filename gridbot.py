@@ -18,6 +18,15 @@ def send_telegram_message(message):
 session = HTTP(
     api_key=os.getenv("API_KEY"),
     api_secret=os.getenv("API_SECRET")
+
+    try:
+    account_info = session.get_wallet_balance(accountType="UNIFIED")
+    print("✅ Verbindung erfolgreich:", account_info)
+    send_telegram_message("✅ Verbindung zur Bybit API erfolgreich. Bot startet...")
+except Exception as e:
+    print("❌ API-Verbindungsfehler:", e)
+    send_telegram_message(f"❌ API-Verbindungsfehler: {str(e)}")
+    exit()
 )
 
 # GridBot-Logik mit Preisabfrage und Schutz vor doppelten Orders
