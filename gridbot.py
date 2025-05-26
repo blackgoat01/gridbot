@@ -6,7 +6,7 @@ import json
 import requests
 from datetime import datetime
 
-# ENV Variablen laden
+# === KONFIGURATION AUS ENV ===
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -17,50 +17,49 @@ SYMBOL = "DOGEUSDT"
 GRID_QTY = 45
 GRID_BUY_PRICE = 0.2182
 GRID_SELL_PRICE = 0.2204
-CHECK_INTERVAL = 15 * 60
+CHECK_INTERVAL = 15 * 60  # 15 Minuten
 
+# === TELEGRAM ===
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": msg}
-        requests.post(url, data=data)
+        payload = {"chat_id": CHAT_ID, "text": msg}
+        requests.post(url, data=payload)
     except Exception as e:
-        print("Telegram Error:", e)
+        print("Telegram Fehler:", e)
 
+# === V5 SIGNATUR ===
 def get_timestamp():
     return str(int(time.time() * 1000))
 
-def sign_request(payload: str, secret: str):
-    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+def sign_payload(query: str, secret: str):
+    return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
-def make_headers(payload: str):
-    return {
-        "X-BAPI-API-KEY": API_KEY,
-        "X-BAPI-SIGN": sign_request(payload, API_SECRET),
-        "X-BAPI-TIMESTAMP": get_timestamp(),
-        "Content-Type": "application/json"
-    }
-
-def get_wallet():
+# === WALLET ABFRAGE ===
+def get_wallet_balance():
     endpoint = "/v5/account/wallet-balance"
     timestamp = get_timestamp()
-    query = f"accountType=UNIFIED&coin=DOGE"
-    signature = sign_request(f"{timestamp}{API_KEY}{query}", API_SECRET)
+    query_string = f"accountType=UNIFIED&coin=DOGE"
+    signature = sign_payload(f"{timestamp}{API_KEY}{query_string}", API_SECRET)
     headers = {
         "X-BAPI-API-KEY": API_KEY,
-        "X-BAPI-TIMESTAMP": timestamp,
-        "X-BAPI-SIGN": signature
+        "X-BAPI-SIGN": signature,
+        "X-BAPI-TIMESTAMP": timestamp
     }
+    url = f"{BASE_URL}{endpoint}?{query_string}"
     try:
-        response = requests.get(BASE_URL + endpoint, params={"accountType": "UNIFIED", "coin": "DOGE"}, headers=headers)
-        result = response.json()
-        return float(result["result"]["list"][0]["coin"][0]["availableToTrade"])
+        res = requests.get(url, headers=headers)
+        data = res.json()
+        doge_data = data['result']['list'][0]['coin'][0]
+        return float(doge_data.get("availableToTrade", 0))
     except Exception as e:
-        send_telegram(f"Wallet Fehler: {str(e)}")
-        return 0.0
+        send_telegram(f"❌ Wallet Fehler: {str(e)}")
+        return 0
 
+# === ORDER SENDEN ===
 def place_order(side, price, qty):
     endpoint = "/v5/order/create"
+    timestamp = get_timestamp()
     body = {
         "category": "spot",
         "symbol": SYMBOL,
@@ -70,26 +69,37 @@ def place_order(side, price, qty):
         "price": str(price),
         "time_in_force": "GTC"
     }
-    payload = json.dumps(body)
-    headers = make_headers(payload)
+    body_json = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
+    signature = hmac.new(API_SECRET.encode(), body_json.encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "X-BAPI-API-KEY": API_KEY,
+        "X-BAPI-SIGN": signature,
+        "X-BAPI-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
+    }
     try:
-        response = requests.post(BASE_URL + endpoint, headers=headers, data=payload)
-        send_telegram(f"{side} Order: {qty} {SYMBOL} @ {price} ➜ Antwort: {response.text}")
+        res = requests.post(BASE_URL + endpoint, headers=headers, data=body_json)
+        send_telegram(f"📥 {side} {qty} DOGE @ {price} ➜ {res.status_code} - {res.text}")
     except Exception as e:
-        send_telegram(f"Fehler bei {side}: {str(e)}")
+        send_telegram(f"❌ Order Fehler: {str(e)}")
 
-def run_bot():
-    send_telegram("✅ GridBot wurde erfolgreich gestartet!")
+# === MAIN LOOP ===
+def run():
+    send_telegram("✅ GridBot wurde gestartet!")
     while True:
-        send_telegram(f"✅ GridBot läuft (15 Min). {SYMBOL} Grid aktiv [{datetime.now().strftime('%H:%M:%S')}]")
-        place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
-        time.sleep(5)
-        balance = get_wallet()
-        if balance >= GRID_QTY:
-            place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
-        else:
-            send_telegram("⚠️ Noch nicht genug DOGE vorhanden. Sell wird übersprungen.")
+        try:
+            now = datetime.now().strftime('%H:%M:%S')
+            send_telegram(f"🔄 Prüfung gestartet {now}")
+            place_order("Buy", GRID_BUY_PRICE, GRID_QTY)
+            time.sleep(5)
+            balance = get_wallet_balance()
+            if balance >= GRID_QTY:
+                place_order("Sell", GRID_SELL_PRICE, GRID_QTY)
+            else:
+                send_telegram("⚠️ Noch nicht genug DOGE für Verkauf.")
+        except Exception as err:
+            send_telegram(f"❌ Allgemeiner Fehler: {err}")
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
-    run_bot()
+    run()
